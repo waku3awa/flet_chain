@@ -9,11 +9,24 @@ from flet import (
     Draggable,
     DragTarget,
     IconButton,
-    Icons,
+    Dropdown,
+    dropdown,
+    PopupMenuButton,
+    PopupMenuItem,
     Divider,
+    RadioGroup,
+    Radio,
     ScrollMode,
 )
-from typing import Optional, List
+from typing import Optional, List, Dict
+import re
+
+
+def extract_single_number(text):
+    numbers = re.findall(r'\d+', text)
+    if len(numbers) == 1:
+        return int(numbers[0])
+    return None
 
 # ===== Chain of Responsibility のハンドラー実装 =====
 
@@ -57,7 +70,6 @@ class HandlerC(Handler):
         if self.next_handler:
             self.next_handler.handle(request, log_func)
 
-# D は B とほぼ同様ですが、ログに「（D版）」と表示する例です
 class HandlerD(Handler):
     def handle(self, request: dict, log_func):
         if request.get("data"):
@@ -77,112 +89,49 @@ handler_classes = {
     "D": HandlerD,
 }
 
-def main(page: Page):
-    page.title = "Chain of Responsibility デモ（ドラッグ＆ドロップ版）"
-    page.scroll = "adaptive"
+# ===== グラフ情報の内部データ =====
+# 各ノードは一意の id, ブロックの type, 接続先ノード id (next) を保持します
+graph_nodes: List[Dict] = []
+# ノード id 用のカウンター
+node_id_counter = 0
 
-    # --- チェーン構成用変数 ---
-    initial_block_config: Optional[str] = None
-    loop_blocks_config: List[str] = []
+# ノード追加用の関数
+def add_node(block_type: str) -> None:
+    global node_id_counter, graph_nodes
+    node = {
+        "id": node_id_counter,
+        "type": block_type,
+        "next": None  # 接続先ノードの id (未設定なら None)
+    }
+    graph_nodes.append(node)
+    node_id_counter += 1
+
+def remove_node(node_id: int) -> None:
+    global graph_nodes, start_node_id
+    # 削除対象ノードを除去
+    graph_nodes = [node for node in graph_nodes if node["id"] != node_id]
+    # 他のノードの接続先が削除された場合は None に
+    for node in graph_nodes:
+        if node["next"] == node_id:
+            node["next"] = None
+    # 開始ノードが削除された場合
+    if start_node_id == node_id:
+        start_node_id = None
+
+# ===== Flet アプリ本体 =====
+def main(page: Page):
+    # 開始ノードの id
+    start_node_id: Optional[int] = None
+
+    page.title = "Chain of Responsibility グラフ構成（ドラッグ＆ドロップ版）"
+    page.scroll = "adaptive"
 
     log_column = Column(scroll=ScrollMode.AUTO, expand=True)
 
-    # ----- 右ペイン：チェーン構成表示エリア -----
-    # 初回ブロックエリア用 DragTarget 内の表示コンテナ
-    initial_block_container = Container(
-        content=Text("ここに初回ブロックをドロップ (例：A)"),
-        width=200,
-        height=60,
-    )
-
-    # ループブロックエリア用 Column
-    loop_blocks_column = Column(spacing=10)
-    loop_blocks_container = Container(
-        content=loop_blocks_column,
-        width=200,
-        height=150,
-        padding=10,
-    )
-
-    # チェーン表示エリアの更新関数（各ウィジェット更新後に page.update() を呼ぶ）
-    def update_chain_display():
-        nonlocal initial_block_config, loop_blocks_config
-        # 初回ブロックの表示更新
-        if initial_block_config:
-            initial_block_container.content = Row(
-                [
-                    Text(initial_block_config, size=20),
-                    IconButton(
-                        icon=Icons.CLEAR,
-                        tooltip="削除",
-                        on_click=lambda e: remove_initial_block(),
-                    ),
-                ],
-            )
-        else:
-            initial_block_container.content = Text("ここに初回ブロックをドロップ (例：A)")
-        initial_block_container.update()
-
-        # ループブロックの表示更新
-        loop_blocks_column.controls.clear()
-        for i, block_id in enumerate(loop_blocks_config):
-            block_container = Container(
-                content=Row(
-                    [
-                        Text(block_id, size=20),
-                        IconButton(
-                            icon=Icons.CLEAR,
-                            tooltip="削除",
-                            data=i,
-                            on_click=lambda e, index=i: remove_loop_block(index),
-                        ),
-                    ],
-                ),
-                width=180,
-                height=50,
-            )
-            loop_blocks_column.controls.append(block_container)
-        # 末尾にドロップ用 DragTarget を追加
-        loop_blocks_column.controls.append(
-            DragTarget(
-                content=Container(
-                    content=Text("＋ ブロックをドロップ", size=14, color="gray"),
-                    width=180,
-                    height=40,
-                ),
-                group="blocks",
-                on_accept=on_accept_loop_block
-            )
-        )
-        loop_blocks_container.update()
+    # ----- ログ表示用関数 -----
+    def log(message: str):
+        log_column.controls.append(Text(message))
         page.update()
-
-    # 初回ブロック削除
-    def remove_initial_block():
-        nonlocal initial_block_config
-        initial_block_config = None
-        update_chain_display()
-
-    # ループブロック削除
-    def remove_loop_block(index: int):
-        nonlocal loop_blocks_config
-        if 0 <= index < len(loop_blocks_config):
-            del loop_blocks_config[index]
-            update_chain_display()
-
-    # 初回ブロックエリアへのドロップ処理
-    def on_accept_initial(e: ft.DragTargetEvent):
-        nonlocal initial_block_config
-        src = page.get_control(e.src_id)
-        initial_block_config = src.data
-        update_chain_display()
-
-    # ループブロックエリアへの追加処理
-    def on_accept_loop_block(e: ft.DragTargetEvent):
-        nonlocal loop_blocks_config
-        src = page.get_control(e.src_id)
-        loop_blocks_config.append(src.data)
-        update_chain_display()
 
     # ----- 左ペイン：利用可能ブロック一覧 -----
     available_blocks = ["A", "B", "C", "D"]
@@ -191,12 +140,11 @@ def main(page: Page):
         available_block_controls.append(
             Draggable(
                 content=Container(
-                    content=Text(block_id, size=20, weight="bold"),
+                    content=Text(block_id, size=20, weight="bold", color="white"),
                     width=60,
                     height=60,
                     bgcolor=ft.Colors.CYAN,
-                    # alignment="center",
-                    # border=1,
+                    alignment=ft.alignment.center,
                 ),
                 group="blocks",
                 data=block_id
@@ -211,80 +159,129 @@ def main(page: Page):
         spacing=10,
     )
 
-    # ----- チェーン構成エリア（右ペイン） -----
-    chain_configuration_area = Column(
-        controls=[
-            Text("チェーン構成", weight="bold"),
-            Text("【初回ブロック】", size=16),
-            DragTarget(
-                content=initial_block_container,
-                group="blocks",
-                on_accept=on_accept_initial
+    # ----- 右ペイン：グラフ構成エリア -----
+    # グラフノードの一覧表示用 Column
+    graph_nodes_column = Column(spacing=10)
+
+    # グラフ全体エリアの更新（ノード一覧、各ノードの接続先ドロップダウン、開始ノード設定ボタン）
+    def update_graph_display():
+        nonlocal start_node_id
+        graph_nodes_column.controls.clear()
+        for node in graph_nodes:
+            # ドロップダウンのアイテムは、同じグラフ内の他のノード＋「なし」
+            dropdown_items = [dropdown.Option("None", text="None")]
+            for other in graph_nodes:
+                if other["id"] != node["id"]:
+                    dropdown_items.append(dropdown.Option(f'{other["type"]} (id:{other["id"]})', text=str(other["id"])))
+            # 現在設定されている next 値（文字列に変換しておく）
+            current_val = str(node["next"]) if node["next"] is not None else "None"
+
+            # ドロップダウン変更時の処理
+            def on_change_dropdown(e, node_id=node["id"]):
+                val = extract_single_number(e.control.value)
+                # "None" の場合は接続解除
+                for n in graph_nodes:
+                    if n["id"] == node_id:
+                        n["next"] = None if (val == "None") or (val is None) else int(val)
+                update_graph_display()
+
+            node_dropdown = Dropdown(
+                options=dropdown_items,
+                value=current_val,
+                on_change=on_change_dropdown,
+                width=150,
+            )
+            # 「開始ノードに設定」ボタン（すでに開始ノードなら★マーク）
+            def set_as_start(e, node_id=node["id"]):
+                nonlocal start_node_id
+                start_node_id = node_id
+                update_graph_display()
+            start_btn = ElevatedButton(
+                text="★" if start_node_id == node["id"] else "Set Start",
+                on_click=set_as_start,
+                width=80
+            )
+            # ノード削除ボタン
+            def delete_node(e, node_id=node["id"]):
+                remove_node(node_id)
+                update_graph_display()
+            del_btn = IconButton(
+                icon=ft.Icons.DELETE,
+                tooltip="削除",
+                on_click=delete_node
+            )
+
+            node_row = Row(
+                controls=[
+                    Text(f"ID:{node['id']}  {node['type']}", size=18),
+                    Text("→"),
+                    node_dropdown,
+                    start_btn,
+                    del_btn,
+                ],
+                alignment="spaceBetween"
+            )
+            graph_nodes_column.controls.append(Container(content=node_row, padding=5, bgcolor=ft.Colors.BLUE_50))
+        graph_nodes_column.update()
+        page.update()
+
+    # ドラッグでグラフエリアにノード追加
+    graph_area = DragTarget(
+        content=Container(
+            content=Column(
+                controls=[
+                    Text("ここにブロックをドロップしてノード追加", color="gray", size=16),
+                    graph_nodes_column,
+                ],
+                spacing=10,
             ),
-            Divider(),
-            Text("【ループブロック】", size=16),
-            loop_blocks_container,
-            Container(
-                content=Text("※ ループ：最後のブロックから先頭のループブロックへ ↻", color="blue", size=12),
-                padding=5,
-            ),
-        ],
-        spacing=10,
+            width=400,
+            height=400,
+            border=ft.border.all(2, ft.Colors.BLACK),
+            padding=10,
+        ),
+        group="blocks",
+        on_accept=lambda e: on_accept_graph(e)
     )
 
-    # ----- チェーン開始ボタン -----
-    def start_chain(e):
-        nonlocal initial_block_config, loop_blocks_config
+    def on_accept_graph(e: ft.DragTargetEvent):
+        src = page.get_control(e.src_id)
+        # src.data はブロックの種別（例："A"）
+        add_node(src.data)
+        update_graph_display()
+
+    # ----- グラフ開始ボタン -----
+    def start_graph(e):
         log_column.controls.clear()
-        log("開始")
-        if not initial_block_config:
-            log("初回ブロックが設定されていません。")
+        log("【処理開始】")
+        if start_node_id is None:
+            log("開始ノードが設定されていません。")
             page.update()
             return
-        if not loop_blocks_config:
-            log("ループブロックが設定されていません。")
-            page.update()
-            return
-
+        # ノード id ごとにハンドラーインスタンスを生成
+        handler_map: Dict[int, Handler] = {}
+        for node in graph_nodes:
+            # ハンドラーのインスタンスを生成（node["type"] から）
+            handler_map[node["id"]] = handler_classes[node["type"]](f"{node['type']}(id:{node['id']})")
+        # 接続情報（各ノードの next）
+        for node in graph_nodes:
+            nxt = node["next"]
+            if nxt is not None and nxt in handler_map:
+                handler_map[node["id"]].set_next(handler_map[nxt])
+        # 開始ノードから処理開始
         request = {}
-        # 初回ブロックのインスタンス作成
-        head = handler_classes[initial_block_config](initial_block_config)
-        current = head
-
-        # ループブロックのインスタンス作成
-        loop_handlers = []
-        for bid in loop_blocks_config:
-            loop_handlers.append(handler_classes[bid](bid))
-        # 接続: 初回ブロックの next にループブロックの先頭を設定
-        current.set_next(loop_handlers[0])
-        # ループブロック間の接続
-        for i in range(len(loop_handlers) - 1):
-            loop_handlers[i].set_next(loop_handlers[i+1])
-        # 最後のループブロックから先頭へループ
-        loop_handlers[-1].set_next(loop_handlers[0])
-
-        head.handle(request, log)
-        log("終わり")
+        handler_map[start_node_id].handle(request, log)
+        log("【処理終了】")
         page.update()
 
-    start_button = ElevatedButton(text="チェーン開始", on_click=start_chain)
-
-    # ----- ログ表示エリア -----
-    def log(message: str):
-        log_column.controls.append(Text(message))
-        page.update()
-
-    log_area = Column(
-        controls=[Text("【ログ】", weight="bold"), log_column],
-        expand=True,
-    )
+    start_button = ElevatedButton(text="グラフ開始", on_click=start_graph)
 
     # ----- 全体レイアウト（左右） -----
     main_row = Row(
         controls=[
             Container(content=available_blocks_column, width=120, padding=10),
             Container(width=20),  # スペーサー
-            Container(content=chain_configuration_area, padding=10),
+            Container(content=graph_area, padding=10),
         ],
     )
 
@@ -293,10 +290,15 @@ def main(page: Page):
         Divider(),
         main_row,
         Divider(),
-        log_area,
+        Column(
+            controls=[
+                Text("【ログ】", weight="bold"),
+                log_column
+            ],
+            expand=True,
+        ),
     )
 
-    # 初期表示更新
-    update_chain_display()
+    update_graph_display()
 
 ft.app(target=main)
